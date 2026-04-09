@@ -1,0 +1,21 @@
+{
+  "name": "telegram-baileys-whatsapp-mongodb",
+  "version": "2.0.0",
+  "description": "Telegram to WhatsApp forwarder with MongoDB session storage",
+  "main": "whatsapp_client.js",
+  "scripts": {
+    "start": "node whatsapp_client.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.0",
+    "express": "^4.18.2",
+    "qrcode-terminal": "^0.12.0",
+    "pino": "^8.17.2",
+    "pino-pretty": "^10.3.1",
+    "axios": "^1.6.2",
+    "mongodb": "^6.3.0"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
