@@ -1,1 +1,1 @@
-worker: python main.py
+worker: python whatsapp_bridge.py & python main.py
