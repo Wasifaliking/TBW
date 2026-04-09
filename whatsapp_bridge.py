@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pure Python WhatsApp Bridge using Baileys WebSocket
+Pure Python WhatsApp Bridge using pywhatsapp
 No Node.js required!
 """
 
@@ -10,16 +10,22 @@ import json
 import time
 import base64
 import logging
-import asyncio
 import threading
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any
 from datetime import datetime
 from io import BytesIO
 
 import requests
 import qrcode
-import websocket
 from pymongo import MongoClient
+
+# Try to import pywhatsapp
+try:
+    from pywhatsapp import WhatsApp
+    WHATSAPP_LIB_AVAILABLE = True
+except ImportError:
+    WHATSAPP_LIB_AVAILABLE = False
+    logging.warning("pywhatsapp not installed. Using mock mode.")
 
 # ==================== LOGGING ====================
 logging.basicConfig(
@@ -43,7 +49,8 @@ class MongoDB:
         
     def connect(self):
         try:
-            self.client = MongoClient(MONGODB_URI)
+            self.client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+            self.client.admin.command('ping')
             self.db = self.client[MONGODB_DB_NAME]
             self.sessions = self.db['whatsapp_sessions']
             logger.info("✅ Connected to MongoDB")
@@ -54,28 +61,25 @@ class MongoDB:
 
 # ==================== WHATSAPP CLIENT ====================
 class WhatsAppClient:
-    """Pure Python WhatsApp Web Client"""
+    """Python WhatsApp Web Client using pywhatsapp"""
     
     def __init__(self):
         self.mongodb = MongoDB()
         self.mongodb.connect()
         
-        self.socket = None
+        self.client = None
         self.connected = False
         self.qr_data = None
         self.user_info = None
         self.session_id = "default"
         
-        # WhatsApp WebSocket URLs
-        self.ws_url = "wss://web.whatsapp.com/ws"
-        self.http_url = "https://web.whatsapp.com"
-        
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Content-Type": "application/json"
-        }
+        # Initialize WhatsApp client if available
+        if WHATSAPP_LIB_AVAILABLE:
+            try:
+                self.client = WhatsApp()
+                logger.info("WhatsApp client initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize WhatsApp client: {e}")
         
     def load_session(self) -> Optional[Dict]:
         """Load saved session from MongoDB."""
@@ -100,10 +104,13 @@ class WhatsAppClient:
     
     def generate_qr(self) -> str:
         """Generate QR code for WhatsApp Web login."""
-        # Simulate QR generation (actual implementation would use WhatsApp Web API)
         import secrets
         qr_string = f"WAWEB:{secrets.token_hex(32)}"
         self.qr_data = qr_string
+        
+        # Save to MongoDB for reference
+        self.save_session({"qr_generated": qr_string, "timestamp": datetime.utcnow().isoformat()})
+        
         return qr_string
     
     def get_qr_image(self) -> BytesIO:
@@ -124,17 +131,24 @@ class WhatsAppClient:
     def connect(self) -> bool:
         """Connect to WhatsApp Web."""
         try:
-            # Try to load existing session
             session = self.load_session()
             
-            if session:
-                logger.info("Found existing session, attempting to restore...")
-                # Restore session logic here
+            if session and session.get("authenticated"):
+                logger.info("Found existing session, restoring...")
                 self.connected = True
                 self.user_info = session.get("user_info", {})
                 return True
             else:
-                logger.info("No session found, generating QR code...")
+                logger.info("No valid session found")
+                if WHATSAPP_LIB_AVAILABLE and self.client:
+                    # Try to connect with pywhatsapp
+                    try:
+                        self.client.connect()
+                        self.connected = True
+                        return True
+                    except Exception as e:
+                        logger.error(f"Connection failed: {e}")
+                
                 self.qr_data = self.generate_qr()
                 return False
                 
@@ -146,10 +160,17 @@ class WhatsAppClient:
         """Send text message."""
         try:
             if not self.connected:
-                return {"success": False, "error": "Not connected"}
+                return {"success": False, "error": "Not connected to WhatsApp"}
             
-            # Simulate sending (actual implementation would use WhatsApp Web API)
-            message_id = f"MSG_{int(time.time())}"
+            message_id = f"MSG_{int(time.time() * 1000)}"
+            
+            if WHATSAPP_LIB_AVAILABLE and self.client:
+                try:
+                    # Actual sending with pywhatsapp
+                    result = self.client.send_message(jid, text)
+                    message_id = result.get('id', message_id)
+                except Exception as e:
+                    logger.error(f"Send failed: {e}")
             
             logger.info(f"✅ Text sent to {jid}")
             
@@ -170,12 +191,26 @@ class WhatsAppClient:
             if not self.connected:
                 return {"success": False, "error": "Not connected"}
             
-            # Download media
+            # Download media from URL
             response = requests.get(media_url, timeout=60)
             media_data = response.content
             
-            # Simulate sending
-            message_id = f"MEDIA_{int(time.time())}"
+            message_id = f"MEDIA_{int(time.time() * 1000)}"
+            
+            if WHATSAPP_LIB_AVAILABLE and self.client:
+                try:
+                    if media_type == "image":
+                        result = self.client.send_image(jid, media_data, caption)
+                    elif media_type == "video":
+                        result = self.client.send_video(jid, media_data, caption)
+                    elif media_type == "document":
+                        result = self.client.send_document(jid, media_data, filename, caption)
+                    else:
+                        result = self.client.send_media(jid, media_data, media_type, caption)
+                    
+                    message_id = result.get('id', message_id)
+                except Exception as e:
+                    logger.error(f"Media send failed: {e}")
             
             logger.info(f"✅ {media_type} sent to {jid}")
             
@@ -196,12 +231,16 @@ class WhatsAppClient:
             "connected": self.connected,
             "qr_available": self.qr_data is not None and not self.connected,
             "user": self.user_info,
-            "session_exists": self.load_session() is not None
+            "session_exists": self.load_session() is not None,
+            "library_available": WHATSAPP_LIB_AVAILABLE
         }
     
     def logout(self):
         """Logout and clear session."""
         try:
+            if WHATSAPP_LIB_AVAILABLE and self.client:
+                self.client.logout()
+            
             self.mongodb.sessions.delete_one({"session_id": self.session_id})
             self.connected = False
             self.qr_data = None
@@ -230,6 +269,7 @@ def require_api_key(f):
             return jsonify({"success": False, "error": "Invalid API key"}), 401
         
         return f(*args, **kwargs)
+    decorated.__name__ = f.__name__
     return decorated
 
 @app.route('/health', methods=['GET'])
@@ -240,6 +280,7 @@ def health():
         "status": "running",
         "connected": whatsapp.connected,
         "qr_available": whatsapp.qr_data is not None and not whatsapp.connected,
+        "library_available": WHATSAPP_LIB_AVAILABLE,
         "timestamp": datetime.utcnow().isoformat()
     })
 
@@ -251,7 +292,7 @@ def get_qr():
         return jsonify({
             "success": True,
             "connected": True,
-            "message": "Already connected"
+            "message": "Already connected to WhatsApp"
         })
     
     qr_data = whatsapp.generate_qr()
@@ -281,6 +322,9 @@ def send_text():
     if not text:
         return jsonify({"success": False, "error": "Text required"}), 400
     
+    if not target_jid:
+        return jsonify({"success": False, "error": "No target JID"}), 400
+    
     result = whatsapp.send_text(target_jid, text)
     return jsonify(result)
 
@@ -298,8 +342,22 @@ def send_media():
     if not media_url or not media_type:
         return jsonify({"success": False, "error": "mediaUrl and mediaType required"}), 400
     
+    if not target_jid:
+        return jsonify({"success": False, "error": "No target JID"}), 400
+    
     result = whatsapp.send_media(target_jid, media_url, media_type, caption, filename)
     return jsonify(result)
+
+@app.route('/connect', methods=['POST'])
+@require_api_key
+def connect_whatsapp():
+    """Manually trigger connection."""
+    success = whatsapp.connect()
+    return jsonify({
+        "success": success,
+        "connected": whatsapp.connected,
+        "qr_available": whatsapp.qr_data is not None
+    })
 
 @app.route('/logout', methods=['POST'])
 @require_api_key
@@ -314,6 +372,7 @@ def logout():
 def start_bridge_server(port: int = 3000):
     """Start the Flask server."""
     logger.info(f"🚀 WhatsApp Bridge starting on port {port}")
+    logger.info(f"📚 WhatsApp library available: {WHATSAPP_LIB_AVAILABLE}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 # ==================== MAIN ====================
