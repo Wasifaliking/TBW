@@ -1,0 +1,53 @@
+{
+  "name": "Telegram Baileys WhatsApp Bot with MongoDB",
+  "description": "Telegram to WhatsApp forwarder using Baileys library with MongoDB session storage",
+  "repository": "https://github.com/yourusername/telegram-baileys-whatsapp-mongodb",
+  "keywords": ["python", "nodejs", "telegram", "whatsapp", "baileys", "mongodb"],
+  "env": {
+    "TELEGRAM_BOT_TOKEN": {
+      "description": "Telegram Bot Token from @BotFather",
+      "required": true
+    },
+    "MONGODB_URI": {
+      "description": "MongoDB connection URI (MongoDB Atlas recommended)",
+      "required": true
+    },
+    "MONGODB_DB_NAME": {
+      "description": "MongoDB database name",
+      "value": "whatsapp_bot",
+      "required": true
+    },
+    "WHATSAPP_API_KEY": {
+      "description": "API Key for bridge authentication",
+      "generator": "secret",
+      "required": true
+    },
+    "TARGET_WHATSAPP_JID": {
+      "description": "Target WhatsApp JID (e.g., 923001234567@s.whatsapp.net)",
+      "required": true
+    },
+    "ADMIN_TELEGRAM_IDS": {
+      "description": "Comma-separated admin Telegram IDs",
+      "required": false
+    },
+    "WHATSAPP_BRIDGE_PORT": {
+      "description": "Port for WhatsApp Bridge",
+      "value": "3000",
+      "required": false
+    }
+  },
+  "addons": [
+    {
+      "plan": "mongodb:sandbox",
+      "as": "MONGODB"
+    }
+  ],
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    },
+    {
+      "url": "heroku/python"
+    }
+  ]
+}
